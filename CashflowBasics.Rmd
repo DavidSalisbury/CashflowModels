@@ -1,0 +1,242 @@
+---
+title: "CashflowModelBasics"
+author: "DavidSalisbury"
+date: "13 June 2016"
+output: html_document
+---
+
+In an actuarial model *contracts* can be modelled as a collection of *cashflows*.
+
+A cashflow has three key properties
+1. Time it occurs
+2. The amount of the cashflow
+3. The probability it occurs
+
+There is a fourth property usually included as well
+4. A discounting function to give the present value of the cashflow.
+
+So a cashflow can be represented as 4-tuple: $(t,C,p,v)$
+
+And a contract can be represented as a 3-tuple of functions of time $t$, $(C(t), p(t), v(t))$.
+
+These functions should be welldefined for any integer t >=0.
+
+Let's start with a very simple and well known example... An annuity certain payable for 10 years in advance, with discount rate = 0/no discounting.
+
+Here 
+``` {r}
+C <- function(t) {ifelse (t < 10, 1, 0)}
+p <- function(t) {1}
+v <- function(t) {1}
+CF <- function(t) {(p(t)) * C(t)}
+DCF <- function(t) {v(t) * p(t) * C(t)}
+CF(5)
+DCF(10)
+PV <- function(n) {Reduce("+",Map(DCF,seq(0,n)),0)}
+PV(100)
+```
+
+
+## Adding discounting
+
+So far so simple. Now let's tweak the discount function to get a discounted annuity certain...
+
+In order to do it we need a handy little utility function that can repeat the last element of a vector as many times as we need something in order to make a vector of arbitrary length $n$.
+
+``` {r}
+repeatLast <- function (v, n) 
+  {
+      c(head(v, -1), rep(tail(v,1) ,n))[1:n]
+  }
+```
+
+Let's pick a single discount rate to start with, e.g. $2.8%$. 
+
+```{r}
+i <- 0.028
+is <- repeatLast((i),120)
+```
+
+Now we can use the absolutetly brilliant function *Reduce* to get the cumulative product of $1/(1+i)$, using accumulate=TRUE gives us a vector of the cumulative results.
+
+```{r}
+v_generic <- function (t, i) {Reduce("*", 1/(1+(repeatLast(i,t+1))),1,accumulate = TRUE)[t+1]}
+v <- function(t) {v_generic(t,(0.028))}
+```
+
+
+So now if we repeat the calculation...
+
+``` {r}
+CF <- function(t) {(p(t)) * C(t)}
+DCF <- function(t) {v(t) * p(t) * C(t)}
+CF(5)
+DCF(5)
+DCF(10)
+PV <- function(n) {Reduce("+",Map(DCF,seq(0,n)),0)}
+PV(100)
+```
+
+The last result box should give us the value of an annuity certain due payable for 10 years.
+
+Let's check this with the traditional formula
+
+```{r}
+a_n_due <- function(i,t) {(1-(1+i)^-t)/(1-(1/(1+i)))}
+a_n_due(0.028,10)
+```
+
+## Adding contingency
+
+Next we want to add in the probability of payment.
+
+As this is an actuarial calculation let's be old school and use a well loved familiar mortality table - the original 92 projection of pension male annuitant ammounts weighted mortality, arbitrarily chooding calendar year 2010 (PMA92C=2010)
+
+
+
+```{r}
+#TODO: Make this a relatie reference so we can bundle the file in a github repo
+PMA92C10 <- read.csv("C:\\Users\\David\\Dropbox\\Code\\Data\\stripped pma92c10.xls - PMA92C10.csv")
+```
+
+First example let's take an annuity paid immediately (for ten years as before) to a surviving life aged at 40 at the start.
+
+The probabilities need to be converted from qxs to cumulative pxs.
+
+```{r}
+qxs <- PMA92C10[PMA92C10$age >= 40,]$qx
+pxs <- Reduce("*",1-qxs,1,accumulate=TRUE)
+p <- function(t){repeatLast(pxs,120)[t+1]}
+
+```
+
+
+``` {r}
+CF(5)
+DCF(5)
+DCF(10)
+PV(100)
+```
+
+Already we can see that this implementation of p using a lifetable could be improved. We can define a general $_t p_x$ function to calculate the cumulative survival probabilities.
+
+
+```{r}
+tpxs_fn <- function(age, qx, x) {
+
+  work_df=data.frame(age,qx)  
+  qxs <- work_df[work_df$age >= x,]$qx
+  Reduce("*",1-qxs,1,accumulate=TRUE)
+  
+}
+p <- function(t){
+  tpxs <- tpxs_fn(PMA92C10$age,PMA92C10$qx, 40)
+  repeatLast(tpxs,t+1)[t+1]
+#Note how this relies implicitly on the last qx being 1! If we were deploying this we shoud check and enforce this.  
+  }
+
+```
+
+This doesn't change the results...
+
+``` {r}
+CF(5)
+DCF(5)
+DCF(10)
+PV(100)
+```
+
+## Example - whole of life annuities 
+
+We can easily enough adaptt this setup now to calculate whole of life annuities and/or deferred whole of life annuities
+
+```{r}
+C <- function(t) {1}
+
+tpxs_fn <- function(age, qx, x, t) {
+
+  work_df=data.frame(age,qx)  
+  qxs <- work_df[work_df$age >= x,]$qx
+  tpxs <- Reduce("*",1-qxs,1,accumulate=TRUE)
+  repeatLast(tpxs,t+1)[t+1]
+  #Note how this relies implicitly on the last qx being 1! If we were deploying this we shoud check and enforce this.  
+
+  }
+
+p <- function(t){
+  tpxs_fn(PMA92C10$age,PMA92C10$qx, 40,t)
+  }
+
+
+
+v_generic <- function (t, i) {Reduce("*", 1/(1+(repeatLast(i,t+1))),1,accumulate = TRUE)[t+1]}
+
+v <- function(t) {v_generic(t,(0.028))}
+
+
+CF <- function(t) {(p(t)) * C(t)}
+DCF <- function(t) {v(t) * p(t) * C(t)}
+
+CF(5)
+DCF(10)
+
+PV <- function(n) {Reduce("+",Map(DCF,seq(0,n)),0)}
+
+PV(100)
+
+
+
+```
+
+
+## dealing with different payment timings
+
+
+For a start we might want to make a discount function that can deal with non-integer times. 
+
+
+```{r}
+interp_linear <- function(x, x0,y0, x1,y1)
+  {
+    y0 + (x-x0)/(x1-x0) * (y1-y0)
+}
+#Check this definition!
+interp_geom <- function(x, x0,y0, x1,y1)
+  {
+  y0 * (y1/y0)^((x-x0)/(x1-x0))
+}
+
+interp_linear(1.25, 1,5, 2,10)
+interp_linear(1.25, 1,1.05, 2,1.10)
+interp_geom(1.25, 1,1.05, 2,1.10)
+```
+
+```{r}
+interp_disc <- function(v,t) 
+  {
+    t0 <- floor(t)
+    d0 <- repeatLast(v,t0+1)[t0+1]
+    d1 <- repeatLast(v,t0+2)[t0+2]
+    interp_geom(t, t0,d0,t0+1,d1)
+  }
+
+interp_disc(1+c(0.02, 0.03, 0.02, 0.04), 0.5)
+interp_disc(1+c(0.02, 0.03, 0.02, 0.04), 1.25)
+
+
+```
+
+This should allow us to define the discount function $v$ over all positive reals, rather than just integers.
+
+
+```{r}
+v_generic <- function (t, i) {
+  interp_disc(Reduce("*", 1/(1+i),1,accumulate = TRUE),t)
+  }
+v <- function(t) {v_generic(t,(0.028))}
+v(1)
+v(2)
+v(1.5)
+```
+
+

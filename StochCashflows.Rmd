@@ -1,0 +1,91 @@
+---
+title: "StochasticCashflows"
+author: "DavidSalisbury"
+date: "18 June 2016"
+output: html_document
+---
+
+What if we want to consider the cashflows stochastically rather than using mean probability approach?
+
+Let's consider the whole of life annuity example again...
+```{r}
+C <- function(t) {1}
+
+tpxs_fn <- function(age, qx, x, t) {
+
+  work_df=data.frame(age,qx)  
+  qxs <- work_df[work_df$age >= x,]$qx
+  tpxs <- Reduce("*",1-qxs,1,accumulate=TRUE)
+  repeatLast(tpxs,t+1)[t+1]
+  #Note how this relies implicitly on the last qx being 1! If we were deploying this we shoud check and enforce this.  
+
+  }
+
+tpxs_stoch_fn <- function(age, qx, x, t) {
+
+  work_df=data.frame(age,qx)  
+  qxs <- work_df[work_df$age >= x,]$qx
+  tpxs <- Reduce("*",1-qxs,1,accumulate=TRUE)
+  rf <- runif(1, min=0, max=1)
+  stoch_tpxs <- ifelse(tpxs>=rf,1,0)
+  repeatLast(stoch_tpxs,t+1)[t+1]
+  #Note how this relies implicitly on the last qx being 1! If we were deploying this we shoud check and enforce this.  
+
+  }
+
+```
+
+This is not very efficient - if we plan to use this in real life we would memoise, or otherwise make sure we are not recalculating the tpxs at each iteration.
+
+```{r}
+
+p <- function(t){
+  tpxs_stoch_fn(PMA92C10$age,PMA92C10$qx, 40,t)
+  }
+
+
+
+v_generic <- function (t, i) {Reduce("*", 1/(1+(repeatLast(i,t+1))),1,accumulate = TRUE)[t+1]}
+
+v <- function(t) {v_generic(t,(0.028))}
+
+
+CF <- function(t) {(p(t)) * C(t)}
+DCF <- function(t) {v(t) * p(t) * C(t)}
+
+CF(5)
+DCF(10)
+
+PV <- function(n) {Reduce("+",Map(DCF,seq(0,n)),0)[[1]]}
+
+PV(100)
+PV(100)
+PV(100)
+
+```
+
+Note how the three PV calculations for the annuity now have different results (unless your are very VERY lucky!)
+
+
+We can now generate a sample of annuity values for a whole of life annuity discounted at 2.8% for a life aged 40 assuming mortality inline with PMA92 Calendar Year 2010.
+
+WARNING - takes a little time to run.
+
+```{r}
+
+annuity_sample <- sapply(rep_len(100,100),PV)
+annuity_sample[5]
+mean(annuity_sample)
+sd(annuity_sample)
+
+
+```
+
+
+
+```{r}
+library(ggplot2)
+ggplot() +
+  geom_point(data = annuity_sample, aes(x = 1, y = annuity_sample))
+
+```
